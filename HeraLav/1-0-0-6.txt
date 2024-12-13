@@ -1,0 +1,139 @@
+create or alter procedure DADOS_FINANCEIRO_RECEBER
+returns (
+    CODE_PCR integer,
+    CODE_EMP integer,
+    DATA_CAD date,
+    NUM_DOC varchar(15),
+    DATA_VENC date,
+    NOME_CLI varchar(60),
+    VLR_PARC double precision,
+    SITUACAO varchar(1),
+    NUMERO varchar(30),
+    EMITENTE varchar(60),
+    EMISSAO date,
+    NSU varchar(15),
+    CODE_CR integer,
+    CODE_PORT integer,
+    CODE_TD integer,
+    CODE_BCO integer,
+    AGENCIA varchar(15),
+    CONTA varchar(20),
+    DOCUMENTO varchar(30))
+as
+declare variable CODE_DUP integer;
+declare variable NUM_ROWS integer;
+BEGIN
+  SELECT
+      CAST(PAR_VALOR AS INTEGER)
+  FROM
+      PARAMETRO
+  WHERE
+      PAR_CODIGO = 11
+  INTO
+      :CODE_DUP;
+
+  FOR
+    SELECT
+        P.PCR_CODIGO,
+        P.CR_CODIGO,
+        P.PCR_DOCUMENTO,
+        P.PCR_DATA_VENCIMENTO,
+        P.PCR_VALOR_PARCELA,
+        P.PCR_SITUACAO,
+        P.PCR_NSU,
+        P.TD_CODIGO,
+        P.PORT_CODIGO,
+        T.TD_NOME
+    FROM
+        PARCELA_CONTA_RECEBER P
+    LEFT JOIN
+        TIPO_DOCUMENTO T ON P.TD_CODIGO = T.TD_CODIGO
+    WHERE
+        P.CR_CODIGO > 0
+    INTO
+        :CODE_PCR,
+        :CODE_CR,
+        :NUM_DOC,
+        :DATA_VENC,
+        :VLR_PARC,
+        :SITUACAO,
+        :NSU,
+        :CODE_TD,
+        :CODE_PORT,
+        :DOCUMENTO
+    DO
+    BEGIN
+      EMISSAO = NULL;
+      EMITENTE = NULL;
+      NUMERO = NULL;
+      SELECT
+          CAST(C.CR_DATA_CADASTRO AS DATE),
+          C.EMP_CODIGO,
+          P.PES_NOME
+      FROM
+          CONTA_RECEBER C,
+          PESSOA P
+      WHERE
+          C.CLI_CODIGO = P.PES_CODIGO
+      AND C.CR_CODIGO = :CODE_CR
+      INTO
+          :DATA_CAD,
+          :CODE_EMP,
+          :NOME_CLI;
+
+      if (CODE_TD = CODE_DUP) then
+      BEGIN
+        SELECT
+            P.PCRD_NOSSO_NUMERO,
+            B.BCO_NOME
+        FROM
+            PARCELA_CONTA_RECEBER_DUPLICATA P,
+            BANCO B
+        WHERE
+            P.CR_CODIGO = :CODE_CR
+        AND P.PCR_CODIGO = :CODE_PCR
+        AND P.BCO_CODIGO = B.BCO_CODIGO
+        INTO
+            :NUMERO,
+            :EMITENTE;
+        if (EMITENTE IS NOT NULL) then
+          EMISSAO = DATA_CAD;
+      END
+      ELSE
+      BEGIN
+        SELECT
+            COUNT(*)
+        FROM
+            TIPO_DOCUMENTO T
+        WHERE
+            T.TD_CODIGO = :CODE_TD
+        AND T.TD_TIPO = 'C'
+        INTO
+           :NUM_ROWS;
+
+        if (NUM_ROWS > 0) then
+        BEGIN
+          SELECT
+              BCO_CODIGO,
+              PCRC_AGENCIA,
+              PCRC_CONTA,
+              PCRC_NUMERO,
+              PCRC_EMITENTE
+          FROM
+              PARCELA_CONTA_RECEBER_CHEQUE
+          WHERE
+              CR_CODIGO = :CODE_CR
+          AND PCR_CODIGO = :CODE_PCR
+          INTO
+              :CODE_BCO,
+              :AGENCIA,
+              :CONTA,
+              :NUMERO,
+              :EMITENTE;
+          if (EMITENTE IS NOT NULL) then
+            EMISSAO = DATA_CAD;
+        END
+      END
+      SUSPEND;
+    END
+END;
