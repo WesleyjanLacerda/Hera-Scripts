@@ -22,8 +22,6 @@
       }
     }
   ],
-  // Se você tiver problemas com Cross-Origin ou algo assim,
-  // pode remover ou ajustar o gateway:
   "gateway": "https://herasoft-n8n.mcky9h.easypanel.host/webhook/d1c79b7e-d719-4ead-a615-2a1ab61f98d6/chat",
   "identifier": "chat-plugin-template",
   "ui": {
