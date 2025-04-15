@@ -1,0 +1,34 @@
+{
+  "api": [
+    {
+      "url": "https://herasoft-n8n.mcky9h.easypanel.host/webhook/d1c79b7e-d719-4ead-a615-2a1ab61f98d6/chat",
+      "name": "recommendClothes",
+      "description": "Recommend clothes to the user based on their mood",
+      "parameters": {
+        "properties": {
+          "mood": {
+            "description": "The user's current mood, with optional values: happy, sad, anger, fear, surprise, disgust",
+            "enums": ["happy", "sad", "anger", "fear", "surprise", "disgust"],
+            "type": "string"
+          },
+          "gender": {
+            "type": "string",
+            "enum": ["man", "woman"],
+            "description": "The user's gender, which needs to be asked for from the user to obtain this information"
+          }
+        },
+        "required": ["mood", "gender"],
+        "type": "object"
+      }
+    }
+  ],
+  // Se você tiver problemas com Cross-Origin ou algo assim,
+  // pode remover ou ajustar o gateway:
+  "gateway": "https://herasoft-n8n.mcky9h.easypanel.host/webhook/d1c79b7e-d719-4ead-a615-2a1ab61f98d6/chat",
+  "identifier": "chat-plugin-template",
+  "ui": {
+    "url": "http://seu-frontend-ou-nem-precisa", 
+    "height": 200
+  },
+  "version": "1"
+}
