@@ -1,0 +1,462 @@
+create or alter procedure DADOS_FINANCEIRO_RECEBER_CLIE2 (
+    CODE_CLI integer)
+returns (
+    CODE_PCR integer,
+    CODE_EMP integer,
+    DATA_CAD date,
+    NUM_DOC varchar(15),
+    DATA_VENC date,
+    NOME_CLI varchar(60),
+    VLR_PARC double precision,
+    VLR_PAGO double precision,
+    VLR_SLDO double precision,
+    SITUACAO varchar(1),
+    NUMERO varchar(30),
+    EMITENTE varchar(60),
+    EMISSAO date,
+    NSU varchar(15),
+    COMPLEMENTO varchar(200),
+    CODE_CR integer,
+    CODE_PORT integer,
+    CODE_TD integer,
+    CODE_BCO integer,
+    AGENCIA varchar(15),
+    CONTA varchar(20))
+as
+declare variable CODE_AUX integer;
+declare variable CODE_DUP integer;
+declare variable NUM_ROWS integer;
+declare variable VLR_DESC double precision;
+declare variable VLR_JURO double precision;
+declare variable VLR_MULTA double precision;
+BEGIN
+  SELECT
+      CAST(PAR_VALOR AS INTEGER)
+  FROM
+      PARAMETRO
+  WHERE
+      PAR_CODIGO = 121
+  INTO
+      :CODE_DUP;
+
+  FOR
+    SELECT
+        P.CR_CODIGO,
+        PS.PES_NOME,
+        P.PCR_CODIGO,
+        P.CR_CODIGO,
+        P.PCR_DOCUMENTO,
+        P.PCR_DATA_VENCIMENTO,
+        P.PCR_VALOR_PARCELA,
+        P.PCR_SITUACAO,
+        P.PCR_NSU,
+        P.TD_CODIGO,
+        P.PORT_CODIGO,
+        P.PCR_COMPLEMENTO 
+    FROM
+        PARCELA_CONTA_RECEBER P,
+        PESSOA PS
+    WHERE
+        P.CLI_CODIGO = PS.PES_CODIGO
+    AND PS.PES_CODIGO = :CODE_CLI
+    INTO
+        :CODE_AUX,
+        :NOME_CLI,
+        :CODE_PCR,
+        :CODE_CR,
+        :NUM_DOC,
+        :DATA_VENC,
+        :VLR_PARC,
+        :SITUACAO,
+        :NSU,
+        :CODE_TD,
+        :CODE_PORT,
+        :COMPLEMENTO
+    DO
+    BEGIN
+      EMISSAO = NULL;
+      EMITENTE = NULL;
+      NUMERO = NULL;
+      SELECT
+          EMP_CODIGO,
+          CAST(CR_DATA_CADASTRO AS DATE)
+      FROM
+          CONTA_RECEBER
+      WHERE
+          CR_CODIGO = :CODE_AUX
+      INTO
+          :CODE_EMP,
+          :DATA_CAD;
+      if (CODE_TD = CODE_DUP) then
+      BEGIN
+        SELECT
+            P.PCRD_NOSSO_NUMERO,
+            B.BCO_NOME
+        FROM
+            PARCELA_CONTA_RECEBER_DUPLICATA P,
+            BANCO B
+        WHERE
+            P.CR_CODIGO = :CODE_CR
+        AND P.PCR_CODIGO = :CODE_PCR
+        AND P.BCO_CODIGO = B.BCO_CODIGO
+        INTO
+            :NUMERO,
+            :EMITENTE;
+        if (EMITENTE IS NOT NULL) then
+          EMISSAO = DATA_CAD;
+      END
+      ELSE
+      BEGIN
+        SELECT
+            COUNT(*)
+        FROM
+            TIPO_DOCUMENTO
+        WHERE
+            TD_CODIGO = :CODE_TD
+        AND TD_TIPO = 'C'
+        INTO
+           :NUM_ROWS;
+
+        if (NUM_ROWS > 0) then
+        BEGIN
+          SELECT
+              BCO_CODIGO,
+              PCRC_AGENCIA,
+              PCRC_CONTA,
+              PCRC_NUMERO,
+              PCRC_EMITENTE
+          FROM
+              PARCELA_CONTA_RECEBER_CHEQUE
+          WHERE
+              CR_CODIGO = :CODE_CR
+          AND PCR_CODIGO = :CODE_PCR
+          INTO
+              :CODE_BCO,
+              :AGENCIA,
+              :CONTA,
+              :NUMERO,
+              :EMITENTE;
+          if (EMITENTE IS NOT NULL) then
+            EMISSAO = DATA_CAD;
+        END
+      END
+
+      SELECT
+           COALESCE(SUM(BCR_DESCONTO),0),
+           COALESCE(SUM(BCR_JUROS),0),
+           COALESCE(SUM(BCR_MULTA),0),
+           COALESCE(SUM(BCR_VALOR),0)
+       FROM
+           BAIXA_CONTA_RECEBER
+       WHERE
+           PCR_CODIGO = :CODE_PCR
+       INTO
+           :VLR_DESC,
+           :VLR_JURO,
+           :VLR_MULTA,
+           :VLR_PAGO;
+
+       if (VLR_PAGO > 0) then
+       BEGIN
+          VLR_SLDO = VLR_PARC - VLR_PAGO - VLR_DESC + VLR_JURO + VLR_MULTA;
+         if (VLR_SLDO < 0) then
+           VLR_SLDO = 0;
+       END
+       ELSE
+         VLR_SLDO = VLR_PARC;
+
+      SUSPEND;
+    END
+END;
+
+create or alter procedure SELECT_CTA_PAGAR_FORN (
+    CODE_FORN integer)
+returns (
+    CR integer,
+    CODE integer,
+    CODE_DOC integer,
+    CODE_GF integer,
+    DOCUMENTO varchar(20),
+    DATA_COMPRA date,
+    VENCIMENTO date,
+    VALOR_PARCELA double precision,
+    VALOR_PAGO double precision,
+    SALDO_DEVEDOR double precision,
+    OBSERVACAO blob sub_type 0 segment size 80,
+    DATA_PAGTO date,
+    NOME_CUSTO varchar(60),
+    NOME_DOC varchar(60),
+    COMPLEMENTO varchar(200),
+    NOME_EMPRESA varchar(60))
+as
+BEGIN
+  FOR
+    SELECT
+        CPR.CPR_CODIGO,
+        PCP.PCP_CODIGO,
+        PCP.PCP_DOCUMENTO,
+        CAST(CPR.CPR_DATA_CADASTRO AS DATE),
+        PCP.PCP_DATA_VENCIMENTO,
+        PCP.PCP_VALOR_PARCELA,
+        PCP.TD_CODIGO,
+        TD.TD_NOME,
+        C.CC_NOME,
+        E.EMP_RAZAO_SOCIAL,
+        F.GF_CODIGO,
+        PCP.PCP_COMPLEMENTO
+    FROM
+        CONTA_PAGAR CPR,
+        PARCELA_CONTA_PAGAR PCP,
+        TIPO_DOCUMENTO TD,
+        CENTRO_CUSTO C ,
+        EMPRESA E,
+        FORNECEDOR F
+    WHERE
+        CPR.CPR_CODIGO = PCP.CPR_CODIGO
+    AND CPR.EMP_CODIGO = E.EMP_CODIGO
+    AND PCP.TD_CODIGO = TD.TD_CODIGO
+    AND PCP.CC_CODIGO = C.CC_CODIGO
+    AND CPR.FORN_CODIGO = :CODE_FORN
+    AND PCP_SITUACAO IN('A','L')
+    AND CPR.FORN_CODIGO = F.FORN_CODIGO
+    INTO
+        :CR,
+        :CODE,
+        :DOCUMENTO,
+        :DATA_COMPRA,
+        :VENCIMENTO,
+        :VALOR_PARCELA,
+        :CODE_DOC,
+        :NOME_DOC,
+        :NOME_CUSTO,
+        :NOME_EMPRESA,
+        :CODE_GF,
+        :COMPLEMENTO
+    DO
+    BEGIN
+      SELECT
+          SUM(BCP_VALOR)
+      FROM
+          BAIXA_CONTA_PAGAR
+      WHERE
+          CPR_CODIGO = :CR
+      AND PCP_CODIGO = :CODE
+      INTO
+          :VALOR_PAGO;
+
+      SELECT
+          MAX(BCP_DATA)
+      FROM
+          BAIXA_CONTA_PAGAR
+      WHERE
+          CPR_CODIGO = :CR
+      AND PCP_CODIGO = :CODE
+      INTO
+          :DATA_PAGTO;
+      if (VALOR_PAGO IS NULL) then
+        VALOR_PAGO = 0;
+      SALDO_DEVEDOR = VALOR_PARCELA - VALOR_PAGO;
+      if (SALDO_DEVEDOR > 0) then
+        SUSPEND;
+    END
+END;
+
+create or alter procedure SELECT_RESUMO_FINANCEIRO_CLI (
+    DATA_INI date,
+    DATA_FIM date,
+    DATA_OP_INI date,
+    DATA_OP_FIM date,
+    CLI_INI integer,
+    CLI_FIM integer,
+    REP_INI integer,
+    REP_FIM integer)
+returns (
+    CODE_CLI integer,
+    NOME_CLI varchar(60),
+    MARCA_CLI varchar(60),
+    SITUACAO_CLI varchar(1),
+    TIPO varchar(10),
+    DESCRICAO varchar(250),
+    VALOR double precision)
+as
+declare variable data date;
+declare variable DOC integer;
+declare variable MES integer;
+declare variable ANO integer;
+BEGIN
+  SELECT
+      CAST(PAR_VALOR AS INTEGER)
+  FROM
+      PARAMETRO
+  WHERE
+      PAR_CODIGO = 9
+  INTO
+      :DOC;
+
+  FOR
+    SELECT
+        CL.CLI_CODIGO,
+        P.PES_NOME,
+        M.MARC_NOME,
+        CL.CLI_ATIVO
+    FROM
+        CLIENTE CL,
+        REPRESENTANTE RP,
+        PESSOA P,
+        MARCA M
+    WHERE
+        CL.REP_CODIGO = RP.REP_CODIGO
+    AND CL.CLI_CODIGO = P.PES_CODIGO
+    AND CL.MARC_CODIGO = M.MARC_CODIGO
+    AND CL.CLI_CODIGO BETWEEN :CLI_INI AND :CLI_FIM
+    AND CL.REP_CODIGO BETWEEN :REP_INI AND :REP_FIM
+    AND CL.GC_CODIGO <> 3
+    INTO
+        :CODE_CLI,
+        :NOME_CLI,
+        :MARCA_CLI,
+        :SITUACAO_CLI
+    DO
+    BEGIN
+      FOR
+        SELECT
+            'CHEQUE DEVOLVIDO',
+            SUM(C.VLR_SLDO)
+        FROM
+            DADOS_FINANCEIRO_RECEBER_CLIE2(:CODE_CLI) C,
+            PORTADOR P
+        WHERE
+            C.VLR_SLDO > 0
+        AND C.SITUACAO IN('A','L')
+        AND C.DATA_VENC BETWEEN :DATA_INI AND :DATA_FIM
+        AND C.CODE_PORT = P.PORT_CODIGO
+        AND P.PORT_CODIGO = 3
+        GROUP BY 'CHEQUE DEVOLVIDO'
+        INTO
+           :DESCRICAO,
+           :VALOR
+        DO
+        BEGIN
+          if (VALOR > 0) then
+          BEGIN
+            TIPO = 'A RECEBER';
+            SUSPEND;
+          END
+        END
+
+     FOR
+        SELECT
+            'INDENIZACOES',
+            SUM(I.IND_VALOR_TOTAL)
+        FROM
+            INDENIZACAO I
+        WHERE
+            I.IND_SITUACAO = 'A'
+        AND CAST(I.IND_DATA AS DATE) BETWEEN :DATA_INI AND :DATA_FIM
+        AND I.CLI_CODIGO = :CODE_CLI
+        GROUP BY 'INDENIZACOES'
+        INTO
+           :DESCRICAO,
+           :VALOR
+        DO
+        BEGIN
+          if (VALOR > 0) then
+          BEGIN
+            TIPO = 'A PAGAR';
+            SUSPEND;
+          END
+        END
+
+      FOR
+        SELECT
+            S.SALDO_DEVEDOR,
+            S.DATA_COMPRA,
+            'A PAGAR' AS TIPO,
+            CAST('CREDITO FCH. DE OPs: ' ||
+                 LPAD(CAST(EXTRACT(DAY FROM :DATA) AS VARCHAR(2)), 2, '0') || '/' || 
+                 LPAD(CAST(EXTRACT(MONTH FROM :DATA) AS VARCHAR(2)), 2, '0') || '/' || 
+                 CAST(EXTRACT(YEAR FROM :DATA) AS VARCHAR(4)) AS VARCHAR(50)) || 
+            '. DOC: ' || S.DOCUMENTO || '. ' || S.COMPLEMENTO AS DESCRICAO
+
+        FROM
+            SELECT_CTA_PAGAR_FORN(:CODE_CLI) S
+        WHERE S.SALDO_DEVEDOR > 0
+        AND S.DATA_COMPRA BETWEEN :DATA_INI AND :DATA_FIM
+        AND S.CODE_DOC = 8
+        INTO
+           :VALOR,
+           :DATA,
+           :TIPO,
+           :DESCRICAO
+        DO
+        BEGIN
+            SUSPEND;
+        END
+      FOR
+        SELECT
+            C.DATA_CAD,
+            C.VLR_SLDO,
+            'A RECEBER' AS TIPO,
+            CAST('DEBITO FCH. DE OPs: ' || 
+                 LPAD(CAST(EXTRACT(DAY FROM :DATA) AS VARCHAR(2)), 2, '0') || '/' || 
+                 LPAD(CAST(EXTRACT(MONTH FROM :DATA) AS VARCHAR(2)), 2, '0') || '/' || 
+                 CAST(EXTRACT(YEAR FROM :DATA) AS VARCHAR(4)) AS VARCHAR(50)) || 
+            '. DOC: ' || C.NUM_DOC || '. ' || C.COMPLEMENTO AS DESCRICAO
+
+        FROM
+            DADOS_FINANCEIRO_RECEBER_CLIE2(:CODE_CLI) C
+        WHERE
+            C.VLR_SLDO > 0
+            AND C.SITUACAO IN('A', 'L')
+            AND C.DATA_VENC BETWEEN :DATA_INI AND :DATA_FIM
+            AND C.CODE_TD = :DOC
+        INTO
+            :DATA,
+            :VALOR,
+            :TIPO,
+            :DESCRICAO
+        DO
+        BEGIN
+            SUSPEND;
+        END
+      FOR
+        SELECT
+            EXTRACT(MONTH FROM O.OP_DATA_CONCLUSAO),
+            EXTRACT(YEAR FROM O.OP_DATA_CONCLUSAO),
+            SUM(I.IOP_VALOR_TOTAL)
+        FROM
+            ORDEM_PRODUCAO O,
+            ITEM_ORDEM_PRODUCAO I
+
+        WHERE
+            I.OP_CODIGO = O.OP_CODIGO
+        AND O.CLI_CODIGO = :CODE_CLI
+        AND O.OP_SITUACAO = 'N'
+        AND CAST(O.OP_DATA_CONCLUSAO AS DATE) BETWEEN :DATA_OP_INI AND :DATA_OP_FIM
+        GROUP BY
+            EXTRACT(MONTH FROM O.OP_DATA_CONCLUSAO),
+            EXTRACT(YEAR FROM O.OP_DATA_CONCLUSAO)
+        INTO
+            :MES,
+            :ANO, 
+            :VALOR
+        DO
+        BEGIN
+          if (VALOR > 0) then
+          BEGIN
+            TIPO = 'A RECEBER';
+            DESCRICAO  = 'OPs PEND. FECH.' || :MES || '-' || :ANO;
+            SUSPEND;
+          END
+        END
+    END
+END;
+
+ALTER TABLE SERVICO ADD SITUACAO VARCHAR(2);
+UPDATE SERVICO S SET S.SITUACAO = 'A';
+
+ALTER TABLE ARTESANAL ADD SITUACAO VARCHAR(2);
+UPDATE ARTESANAL S SET S.SITUACAO = 'A';
+
+ALTER TABLE PILOTO ADD   PLT_VALOR_CALCULADO  DOUBLE PRECISION;
+ALTER TABLE PILOTO ADD PLT_PESO DOUBLE PRECISION;

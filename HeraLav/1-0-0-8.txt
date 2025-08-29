@@ -1,0 +1,497 @@
+create or alter procedure SELECT_DADOS_FECHAMENTO (
+    DATA_INI date,
+    DATA_FIM date,
+    CLIENTE_INI integer,
+    CLIENTE_FIM integer,
+    REP_INI integer,
+    REP_FIM integer)
+returns (
+    CODE_CLI integer,
+    NOME_CLI varchar(60),
+    CPF_CNPJ_CLI varchar(15),
+    TEL_CLI varchar(15),
+    MARCA_CLI varchar(20),
+    ENDERECO_CLI varchar(120),
+    TOTAL_DEBITOS double precision,
+    TOTAL_CREDITOS double precision,
+    TOTAL_INDENIZACOES double precision,
+    TOTAL_PENDENCIAS double precision,
+    TOTAL_SERVICOS double precision,
+    TOTAL_FECHAMENTO double precision)
+as
+declare variable LG varchar(60);
+declare variable BAR varchar(30);
+declare variable CID varchar(30);
+declare variable UFS varchar(2);
+declare variable QD varchar(5);
+declare variable LT varchar(5);
+declare variable NM varchar(5);
+declare variable TOT_OP double precision;
+declare variable TOT_OS double precision;
+declare variable CODE_DOC integer;
+declare variable TOT_OP_PEN double precision;
+declare variable TOT_OS_PEN double precision;
+declare variable CHQ_DEV double precision;
+declare variable VLR_PAG_DEV double precision;
+declare variable VLR_PAG_CRD double precision;
+declare variable DEBITO_BAIXA double precision;
+begin
+  SELECT
+      CAST(PAR_VALOR AS INTEGER)
+  FROM
+      PARAMETRO
+  WHERE
+      PAR_CODIGO = 9
+  INTO
+      :CODE_DOC;
+
+  FOR
+    SELECT
+        C.CLI_CODIGO, 
+        P.PES_NOME,
+        P.PES_CPF_CNPJ,
+        P.PES_TELEFONE_1,
+        M.MARC_NOME,
+        E.END_LOGRADOURO,
+        E.END_QUADRA,
+        E.END_LOTE,
+        E.END_NUMERO,
+        E.END_BAIRRO,
+        CD.CID_NOME,
+        U.UF_NOME
+    FROM
+        CLIENTE C,
+        PESSOA P,
+        ENDERECO E,
+        CIDADE CD,
+        UF U,
+        MARCA M
+    WHERE
+        C.CLI_CODIGO = P.PES_CODIGO
+    AND C.MARC_CODIGO = M.MARC_CODIGO
+    AND P.PES_CODIGO = E.PES_CODIGO
+    AND E.CID_CODIGO = CD.CID_CODIGO
+    AND CD.UF_CODIGO = U.UF_CODIGO
+    AND C.CLI_CODIGO BETWEEN :CLIENTE_INI AND :CLIENTE_FIM
+    AND C.REP_CODIGO BETWEEN :REP_INI AND :REP_FIM
+    INTO
+        :CODE_CLI,
+        :NOME_CLI,
+        :CPF_CNPJ_CLI,
+        :TEL_CLI,
+        :MARCA_CLI, 
+        :LG,
+        :QD,
+        :LT, 
+        :NM, 
+        :BAR,
+        :CID,
+        :UFS
+    DO
+    BEGIN
+      ENDERECO_CLI = LG;
+      if ( NOT NM IS NULL) then
+         ENDERECO_CLI = ENDERECO_CLI || ', ' || NM;
+      if (NOT QD IS NULL) then
+        ENDERECO_CLI = ENDERECO_CLI || ' QD ' || QD;
+      if (NOT QD IS NULL) then
+        ENDERECO_CLI = ENDERECO_CLI || ' LT ' || LT;
+      ENDERECO_CLI = ENDERECO_CLI || ', ' || BAR || ', ' || CID || '-' || UFS;
+
+      SELECT
+          COALESCE(SUM(IO.IOP_VALOR_TOTAL),0)
+      FROM
+          ORDEM_PRODUCAO O,
+          ITEM_ORDEM_SERVICO I,
+          ORDEM_SERVICO OS,
+          ITEM_ORDEM_PRODUCAO IO
+      WHERE
+          O.IOS_CODIGO = I.IOS_CODIGO
+      AND I.OS_CODIGO = OS.OS_CODIGO
+      AND O.OP_CODIGO = IO.OP_CODIGO
+      AND CAST(O.OP_DATA_CONCLUSAO AS DATE) BETWEEN :DATA_INI AND  :DATA_FIM
+      AND OS.CLI_CODIGO = :CODE_CLI
+      AND O.OP_SITUACAO = 'N'
+      INTO
+          :TOT_OP;
+
+      SELECT
+          COALESCE(SUM(I.IOS_VALOR_TOTAL),0)
+      FROM
+          ORDEM_SERVICO OS,
+          ITEM_ORDEM_SERVICO I
+      WHERE
+          OS.OS_CODIGO = I.OS_CODIGO
+      AND CAST(OS.OS_DATA AS DATE) BETWEEN :DATA_INI AND  :DATA_FIM
+      AND OS.CLI_CODIGO = :CODE_CLI
+      AND OS.OS_SITUACAO = 'N'
+      AND OS.OS_TIPO = 'S'
+      INTO
+          :TOT_OS;
+
+      TOTAL_SERVICOS = TOT_OP + TOT_OS;
+
+      if (TOTAL_SERVICOS > 0) then
+      BEGIN
+        SELECT
+            COALESCE(SUM(IND.IND_VALOR_TOTAL),0)
+        FROM
+            INDENIZACAO IND
+        WHERE
+            IND.CLI_CODIGO = :CODE_CLI
+        AND IND.IND_SITUACAO = 'A'
+        INTO
+            :TOTAL_INDENIZACOES;
+
+        SELECT
+            COALESCE(SUM(PC.PCR_VALOR_PARCELA),0)
+        FROM
+            PARCELA_CONTA_RECEBER PC,
+            CONTA_RECEBER CR
+        WHERE
+            CR.CR_CODIGO = PC.CR_CODIGO
+        AND CR.CLI_CODIGO = :CODE_CLI
+        AND PC.TD_CODIGO = :CODE_DOC
+        AND PC.PCR_SITUACAO IN('A','L')
+        INTO
+            :TOTAL_DEBITOS;
+
+        SELECT
+            COALESCE(SUM(PC.PCR_VALOR_PARCELA),0)
+        FROM
+            PARCELA_CONTA_RECEBER PC,
+            CONTA_RECEBER CR,
+            PORTADOR PT
+        WHERE
+            CR.CR_CODIGO = PC.CR_CODIGO
+        AND CR.CLI_CODIGO = :CODE_CLI
+        AND PC.PCR_SITUACAO IN('A','L')
+        AND PT.PORT_CODIGO = PC.PORT_CODIGO
+        AND PT.PORT_NOME LIKE '%CHEQUE DEVOLVIDO%'
+        INTO
+            :CHQ_DEV;
+
+        SELECT
+            COALESCE(SUM(BC.BCR_VALOR),0)
+        FROM
+            PARCELA_CONTA_RECEBER PC,
+            CONTA_RECEBER CR,
+            PORTADOR PT,
+            BAIXA_CONTA_RECEBER BC
+        WHERE
+            CR.CR_CODIGO = PC.CR_CODIGO
+        AND CR.CLI_CODIGO = :CODE_CLI
+        AND PC.PCR_CODIGO = BC.PCR_CODIGO
+        AND PC.PCR_SITUACAO = 'L'
+        AND PT.PORT_CODIGO = PC.PORT_CODIGO
+        AND PT.PORT_NOME LIKE '%CHEQUE DEVOLVIDO%'
+        INTO
+            :VLR_PAG_DEV;
+
+        SELECT
+            COALESCE(SUM(BCR.BCR_VALOR),0)
+        FROM
+            PARCELA_CONTA_RECEBER PC,
+            CONTA_RECEBER CR,
+            PORTADOR PT,
+            BAIXA_CONTA_RECEBER BCR
+        WHERE
+            CR.CR_CODIGO = PC.CR_CODIGO
+        AND CR.CLI_CODIGO = :CODE_CLI
+        AND PC.TD_CODIGO = :CODE_DOC
+        AND PC.PCR_SITUACAO IN('A','L')
+        AND PT.PORT_CODIGO = PC.PORT_CODIGO
+        AND PT.PORT_NOME <> '%CHEQUE DEVOLVIDO%'
+        AND BCR.PCR_CODIGO = PC.PCR_CODIGO
+        INTO
+            :DEBITO_BAIXA;
+
+        TOTAL_DEBITOS = TOTAL_DEBITOS + CHQ_DEV - VLR_PAG_DEV - DEBITO_BAIXA;
+
+
+        SELECT
+            COALESCE(SUM(PG.PCP_VALOR_PARCELA),0)
+        FROM
+            PARCELA_CONTA_PAGAR PG,
+            CONTA_PAGAR CP
+        WHERE
+            CP.CPR_CODIGO = PG.CPR_CODIGO
+        AND CP.FORN_CODIGO = :CODE_CLI
+        AND PG.TD_CODIGO = :CODE_DOC
+        AND PG.PCP_SITUACAO IN('A','L')
+        INTO
+            :TOTAL_CREDITOS;
+
+        SELECT
+            COALESCE(SUM(B.BCP_VALOR),0)
+        FROM PARCELA_CONTA_PAGAR PG
+        INNER JOIN CONTA_PAGAR       CP
+          ON CP.CPR_CODIGO = PG.CPR_CODIGO
+        INNER JOIN BAIXA_CONTA_PAGAR B
+          ON B.CPR_CODIGO = PG.CPR_CODIGO
+         AND B.PCP_CODIGO = PG.PCP_CODIGO
+        WHERE
+          CP.FORN_CODIGO   = :CODE_CLI
+          AND PG.TD_CODIGO = :CODE_DOC
+          AND PG.PCP_SITUACAO = 'L'
+        INTO
+            :VLR_PAG_CRD;
+
+        TOTAL_CREDITOS = TOTAL_CREDITOS - VLR_PAG_CRD ;
+
+        SELECT
+            COALESCE(SUM(IO.IOP_VALOR_TOTAL),0)
+        FROM
+            ORDEM_PRODUCAO O,
+            ITEM_ORDEM_SERVICO I,
+            ORDEM_SERVICO OS,
+            ITEM_ORDEM_PRODUCAO IO
+        WHERE
+            O.IOS_CODIGO = I.IOS_CODIGO
+        AND I.OS_CODIGO = OS.OS_CODIGO
+        AND O.OP_CODIGO = IO.OP_CODIGO
+        AND CAST(O.OP_DATA_CONCLUSAO AS DATE) < :DATA_INI
+        AND OS.CLI_CODIGO = :CODE_CLI
+        AND O.OP_SITUACAO = 'N'
+        INTO
+            :TOT_OP_PEN;
+
+        SELECT
+            COALESCE(SUM(I.IOS_VALOR_TOTAL),0)
+        FROM
+            ORDEM_SERVICO OS,
+            ITEM_ORDEM_SERVICO I
+        WHERE
+            OS.OS_CODIGO = I.OS_CODIGO
+        AND CAST(OS.OS_DATA AS DATE) < :DATA_INI
+        AND OS.CLI_CODIGO = :CODE_CLI
+        AND OS.OS_SITUACAO = 'N'
+        AND OS.OS_TIPO = 'S'
+        INTO
+            :TOT_OS_PEN;
+
+        TOTAL_PENDENCIAS = TOT_OP_PEN + TOT_OS_PEN;
+        TOTAL_FECHAMENTO = (TOTAL_SERVICOS + TOTAL_DEBITOS + TOTAL_PENDENCIAS) - (TOTAL_CREDITOS + TOTAL_INDENIZACOES);
+        SUSPEND;
+      END
+    END
+END;
+
+UPDATE OR INSERT INTO PARAMETRO (PAR_CODIGO, GP_CODIGO, PAR_DESCRICAO, PAR_TIPO_REGISTRO, PAR_MASCARA, PAR_USO, PAR_VALOR)
+                         VALUES (47, 0, 'URL API HERA TALK', '1', NULL, 0, 'http://146.235.51.220:4000')
+                       MATCHING (PAR_CODIGO);
+
+UPDATE OR INSERT INTO PARAMETRO (PAR_CODIGO, GP_CODIGO, PAR_DESCRICAO, PAR_TIPO_REGISTRO, PAR_MASCARA, PAR_USO, PAR_VALOR)
+                         VALUES (48, 0, 'CHAVE API HERA TALK', '1', NULL, 0, '')
+                       MATCHING (PAR_CODIGO);
+
+COMMIT WORK;
+
+
+ALTER TABLE HT_CONEXAO
+  ALTER COLUMN HTC_INSTANCIA TYPE VARCHAR(60);
+
+
+create or alter procedure DUPLICA_NOTA_FISCAL_SAIDA (
+    CODE_NFS integer,
+    CODE_PES integer,
+    CODE_USR integer,
+    CODE_CFOP varchar(10))
+returns (
+    NEW_NFS integer)
+as
+declare variable CODE_EMP integer;
+declare variable SERIE varchar(3);
+declare variable ALIQ_ICMS double precision;
+declare variable TIPO varchar(3);
+declare variable BASE_ICMS double precision;
+declare variable VALOR_ICMS double precision;
+declare variable BASE_ICMS_SUBST double precision;
+declare variable VALOR_ICMS_SUBST double precision;
+declare variable VALOR_FRETE double precision;
+declare variable TIPO_FRETE varchar(3);
+declare variable VALOR_SEGURO double precision;
+declare variable VALOR_DESPESAS double precision;
+declare variable VALOR_IPI double precision;
+declare variable VALOR_ITENS double precision;
+declare variable VALOR_TOTAL double precision;
+declare variable PLACA_VEICULO varchar(10);
+declare variable VOLUMES integer;
+declare variable ESPECIE varchar(15);
+declare variable NUMERO_FRETE integer;
+declare variable PESO_BRUTO double precision;
+declare variable PESO_LIQUIDO double precision;
+declare variable OBSERVACAO blob sub_type 1 segment size 80;
+declare variable CODE_FRN integer;
+declare variable VALOR_DESCONTO double precision;
+declare variable OPERACAO_NFS varchar(3);
+declare variable ENVIO_NFE varchar(5);
+declare variable VALOR_SUFRAMA double precision;
+declare variable DESC_SUFRAMA varchar(3);
+declare variable CODE_ITEM integer;
+declare variable CODE_UND integer;
+declare variable CODE_ITEM_NFS integer;
+declare variable DESCRICAO_ITEM varchar(60);
+declare variable QTDE double precision;
+declare variable VALOR_UNIT double precision;
+declare variable ORIGEM varchar(1);
+declare variable SIT_TRIB varchar(2);
+declare variable PERC_ICMS double precision;
+declare variable PERC_IPI double precision;
+declare variable NCM varchar(8);
+declare variable CSOSN varchar(4);
+declare variable PERC_RED_BASE double precision;
+declare variable CODE_CFOP_ITEM integer;
+declare variable ITEM_EAN varchar(10);
+declare variable ITEM_REF varchar(15);
+BEGIN
+  FOR
+    SELECT
+        EMP_CODIGO,
+        NFS_SERIE,
+        NFS_ALIQ_ICMS,
+        NFS_BASE_ICMS,
+        NFS_VALOR_ICMS,
+        NFS_BASE_ICMS_SUBSTITUICAO,
+        NFS_VALOR_ICMS_SUBSTITUICAO,
+        NFS_VALOR_FRETE,
+        NFS_TIPO_FRETE,
+        NFS_VALOR_SEGURO,
+        NFS_VALOR_DESPESAS,
+        NFS_VALOR_IPI,
+        NFS_VALOR_ITENS,
+        NFS_VALOR_TOTAL,
+        NFS_PLACA_VEICULO,
+        NFS_VOLUMES,
+        NFS_ESPECIE,
+        NFS_NUMERO_FRETE,
+        NFS_PESO_BRUTO,
+        NFS_PESO_LIQUIDO,
+        NFS_OBSERVACAO,
+        FORN_CODIGO,
+        NFS_VALOR_DESCONTO,
+        NFS_OPERACAO,
+        NFS_ENVIO_NFE,
+        NFS_VALOR_SUFRAMA,
+        NFS_DESC_SUFRAMA
+    FROM
+        NOTA_FISCAL_SAIDA
+    WHERE
+        NFS_CODIGO = :CODE_NFS
+    INTO
+        :CODE_EMP,
+        :SERIE,
+        :ALIQ_ICMS,
+        :BASE_ICMS,
+        :VALOR_ICMS,
+        :BASE_ICMS_SUBST,
+        :VALOR_ICMS_SUBST,
+        :VALOR_FRETE,
+        :TIPO_FRETE,
+        :VALOR_SEGURO,
+        :VALOR_DESPESAS,
+        :VALOR_IPI,
+        :VALOR_ITENS,
+        :VALOR_TOTAL,
+        :PLACA_VEICULO,
+        :VOLUMES,
+        :ESPECIE,
+        :NUMERO_FRETE,
+        :PESO_BRUTO,
+        :PESO_LIQUIDO,
+        :OBSERVACAO,
+        :CODE_FRN,
+        :VALOR_DESCONTO,
+        :OPERACAO_NFS,
+        :ENVIO_NFE,
+        :VALOR_SUFRAMA,
+        :DESC_SUFRAMA
+    DO
+    BEGIN
+      SELECT
+          GEN_ID(GEN_NOTA_FISCAL_SAIDA,1)
+      FROM
+          RDB$DATABASE
+      INTO
+          :NEW_NFS;
+
+      INSERT INTO  NOTA_FISCAL_SAIDA(NFS_CODIGO, CFOP_CODIGO, EMP_CODIGO, USR_CODIGO, PES_CODIGO, NFS_DATA_EMISSAO,
+                                     NFS_SERIE, NFS_ALIQ_ICMS, NFS_BASE_ICMS,
+                                     NFS_VALOR_ICMS, NFS_BASE_ICMS_SUBSTITUICAO, NFS_VALOR_ICMS_SUBSTITUICAO,
+                                     NFS_VALOR_FRETE, NFS_TIPO_FRETE, NFS_VALOR_SEGURO, NFS_VALOR_DESPESAS,
+                                     NFS_VALOR_IPI, NFS_VALOR_ITENS, NFS_VALOR_TOTAL, NFS_PLACA_VEICULO,
+                                     NFS_VOLUMES, NFS_ESPECIE, NFS_NUMERO_FRETE, NFS_PESO_BRUTO, NFS_PESO_LIQUIDO,
+                                     NFS_OBSERVACAO, NFS_SITUACAO, FORN_CODIGO, NFS_VALOR_DESCONTO,
+                                     NFS_OPERACAO, NFS_ENVIO_NFE, NFS_DATA_CADASTRO, NFS_VALOR_SUFRAMA,
+                                     NFS_DESC_SUFRAMA)
+                              VALUES(:NEW_NFS, :CODE_CFOP, :CODE_EMP, :CODE_USR, :CODE_PES, 'NOW',
+                                     :SERIE, :ALIQ_ICMS, :BASE_ICMS, :VALOR_ICMS, :BASE_ICMS_SUBST,
+                                     :VALOR_ICMS_SUBST, :VALOR_FRETE, :TIPO_FRETE, :VALOR_SEGURO, :VALOR_DESPESAS,
+                                     :VALOR_IPI, :VALOR_ITENS, :VALOR_TOTAL, :PLACA_VEICULO,
+                                     :VOLUMES, :ESPECIE, :NUMERO_FRETE, :PESO_BRUTO, :PESO_LIQUIDO,
+                                     :OBSERVACAO,'A', :CODE_FRN, :VALOR_DESCONTO,
+                                     :OPERACAO_NFS, :ENVIO_NFE, 'TODAY', :VALOR_SUFRAMA, :DESC_SUFRAMA);
+      FOR
+        SELECT
+            ISD_CODIGO,
+            UNID_CODIGO,
+            INS_QUANTIDADE,
+            INS_VALOR_UNIT,
+            INS_VALOR_TOTAL,
+            INS_ORIGEM,
+            INS_SIT_TRIB,
+            INS_PERC_ICMS,
+            INS_VALOR_ICMS,
+            INS_PERC_IPI,
+            INS_VALOR_IPI,
+            INS_NCM,
+            INS_CSOSN,
+            INS_PERC_RED_BASE,
+            CFOP_CODIGO,
+            INS_EAN,
+            INS_REFERENCIA
+        FROM
+            ITEM_NOTA_SAIDA
+        WHERE
+            NFS_CODIGO = :CODE_NFS
+        INTO
+            :CODE_ITEM,
+            :CODE_UND,
+            :QTDE,
+            :VALOR_UNIT,
+            :VALOR_TOTAL,
+            :ORIGEM,
+            :SIT_TRIB,
+            :PERC_ICMS,
+            :VALOR_ICMS,
+            :PERC_IPI,
+            :VALOR_IPI,
+            :NCM,
+            :CSOSN,
+            :PERC_RED_BASE,
+            :CODE_CFOP_ITEM,
+            :ITEM_EAN,
+            :ITEM_REF
+        DO
+        BEGIN
+          SELECT
+              GEN_ID(GEN_ITEM_NOTA_SAIDA,1)
+          FROM
+              RDB$DATABASE
+          INTO
+              :CODE_ITEM_NFS;
+
+          INSERT INTO ITEM_NOTA_SAIDA(INS_CODIGO, ISD_CODIGO, NFS_CODIGO, UNID_CODIGO, INS_QUANTIDADE,
+                                        INS_VALOR_UNIT, INS_VALOR_TOTAL, INS_ORIGEM, INS_SIT_TRIB, INS_PERC_ICMS,
+                                        INS_VALOR_ICMS, INS_PERC_IPI, INS_VALOR_IPI, INS_NCM, INS_CSOSN, INS_PERC_RED_BASE,
+                                        CFOP_CODIGO, INS_EAN, INS_REFERENCIA
+                                        )
+                                 VALUES(:CODE_ITEM_NFS, :CODE_ITEM, :NEW_NFS, :CODE_UND, :QTDE, :VALOR_UNIT, :VALOR_TOTAL,
+                                        :ORIGEM,  :SIT_TRIB, :PERC_ICMS, :VALOR_ICMS, :PERC_IPI, :VALOR_IPI, :NCM,
+                                        :CSOSN, :PERC_RED_BASE, :CODE_CFOP_ITEM, :ITEM_EAN, :ITEM_REF);
+        END
+      SUSPEND;
+    END
+END;
+
+COMMIT;
